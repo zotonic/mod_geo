@@ -91,7 +91,7 @@ observe_pivot_fields(#pivot_fields{id=Id, rsc=R}, KVs, Context) ->
 %%      If so we store the quadtile code into the resource without a re-pivot.
 optional_geocode(R, Context) ->
     Lat = proplists:get_value(location_lat, R),
-    Long = proplists:get_value(location_long, R),
+    Long = proplists:get_value(location_lng, R),
     case z_utils:is_empty(Lat) andalso z_utils:is_empty(Long) of
         false ->
             reset;
@@ -125,23 +125,23 @@ find_geocode_api(Q, Type, Context) ->
     find_geocode_api(Q, Q, Type, Context).
 
 %% @doc Check with Google and OpenStreetMap if they know the address
-find_geocode_api(_Qmaps, Qosm, country, _Context) ->
+find_geocode_api(_Qmaps, Qosm, country, Context) ->
     Qq = mochiweb_util:quote_plus(Qosm),
-    openstreetmap(Qq);
+    openstreetmap(Qq, Context);
 find_geocode_api(Qmaps, Qosm,  _Type, Context) ->
     Qq = mochiweb_util:quote_plus(Qmaps),
     case googlemaps_check(Qq, Context) of
         {error, _} ->
             Qqo = mochiweb_util:quote_plus(Qosm),
-            openstreetmap(Qqo);
+            openstreetmap(Qqo, Context);
         {ok, {_Lat, _Long}} = Ok->
             Ok
     end.
 
 
-openstreetmap(Q) ->
+openstreetmap(Q, Context) ->
     Url = "http://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=0&q="++Q,
-    case get_json(Url) of
+    case get_json(Url, Context) of
         {ok, [{struct, Props}|_]} ->
             case {z_convert:to_float(proplists:get_value(<<"lat">>, Props)),
                   z_convert:to_float(proplists:get_value(<<"lon">>, Props))}
@@ -165,7 +165,7 @@ openstreetmap(Q) ->
 googlemaps_check(Q, Context) ->
     case z_depcache:get(googlemaps_error, Context) of
         undefined ->
-            case googlemaps(Q) of
+            case googlemaps(Q, Context) of
                 {error, query_limit} = Error ->
                     lager:warning("Geomap: Google reached query limit, disabling for 1800 sec"),
                     z_depcache:set(googlemaps_error, Error, 1800, Context),
@@ -178,9 +178,9 @@ googlemaps_check(Q, Context) ->
             Error
     end.
 
-googlemaps(Q) ->
+googlemaps(Q, Context) ->
     Url = "http://maps.googleapis.com/maps/api/geocode/json?sensor=false&address="++Q,
-    case get_json(Url) of
+    case get_json(Url, Context) of
         {ok, []} ->
             lager:debug("Google maps empty return for ~p", [Q]),
             {error, not_found};
@@ -226,9 +226,12 @@ googlemaps(Q) ->
 
 
 
-get_json(Url) ->
-    lager:debug("Geo lookup: ~p", [Url]),
-    case httpc:request(get, {Url, []}, [{autoredirect, true}, {relaxed, true}, {timeout, 10000}], []) of
+get_json(Url, Context) ->
+    Hs = [
+        {"Referer", z_convert:to_list(z_context:abs_url("/", Context))},
+        {"User-Agent", "Zotonic"}
+    ],
+    case httpc:request(get, {Url, Hs}, [{autoredirect, true}, {relaxed, true}, {timeout, 10000}], []) of
         {ok, {
            {_HTTP, 200, _OK},
            Headers,
@@ -259,7 +262,7 @@ q(R, CountryField, Context) ->
         p(address_street_1, $,, R),
         p(address_city, $,, R),
         p(address_state, $,, R),
-        p(address_postcode, $,, R)
+        remove_ws(p(address_postcode, $,, R))
     ]),
     case Fs of
         <<>> ->
@@ -276,6 +279,9 @@ p(F, Sep, R) ->
         undefined -> <<>>;
         V -> [V, Sep]
     end.
+
+remove_ws(V) ->
+    binary:replace( iolist_to_binary(V), <<" ">>, <<>>, [global] ).
 
 
 country_name([], _Context) -> <<>>;
