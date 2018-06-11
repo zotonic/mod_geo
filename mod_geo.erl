@@ -110,7 +110,7 @@ optional_geocode(R, Context) ->
                             ok;
                         _ ->
                                                 % Changed, and we are doing automatic lookups
-                            Qosm = q(R, address_country_name, Context),
+                            {ok, _Type, Qosm} = q(R, address_country_name, Context),
                             case find_geocode_api(Q, Qosm, Type, Context) of
                                 {error, _} ->
                                     reset;
